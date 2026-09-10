@@ -1,8 +1,7 @@
 import logging
 import sqlite3
 import os
-import urllib.request
-import json
+import requests
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -33,28 +32,26 @@ def init_db():
 
 init_db()
 
-def translate_with_gemini(text):
+def quick_translate(text):
     if not GEMINI_API_KEY:
         return text
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    headers = {"Content-Type": "application/json"}
     prompt_text = (
         f"Translate and rewrite the following dispatch note into a clean, professional English update. "
         f"Keep shop numbers, unit IDs, and technical terms accurate. Only return the final translated text:\n'{text}'"
     )
-    data = {
-        "contents": [{"parts": [{"text": prompt_text}]}]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
     
     try:
-        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
-        with urllib.request.urlopen(req, timeout=5) as response:
-            res_data = json.loads(response.read().decode("utf-8"))
-            return res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        response = requests.post(url, json=payload, timeout=3)
+        if response.status_code == 200:
+            res_json = response.json()
+            return res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
-        logging.error(f"Gemini Translation Error/Timeout: {e}")
-        return text
+        logging.error(f"Translation bypass/timeout: {e}")
+    
+    return text
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -73,8 +70,8 @@ async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Iltimos, case matnini yuboring. Masalan:\n/newcase 3007 reefer unit")
         return
 
-    # Tarjimani olish (Maksimal 5 soniya kutadi)
-    translated_text = translate_with_gemini(user_text)
+    # Tarjimani tezkor sinab ko'rish (Maksimal 3s)
+    translated_text = quick_translate(user_text)
 
     conn = sqlite3.connect("cases.db")
     cursor = conn.cursor()
@@ -87,7 +84,8 @@ async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     await update.message.reply_text(
-        f"✅ **Case #{case_id} caselar qatoriga qo'shildi!**",
+        f"✅ **Case #{case_id} caselar qatoriga qo'shildi!**\n\n"
+        f"📝 **Note:** {translated_text}",
         parse_mode="Markdown"
     )
 
