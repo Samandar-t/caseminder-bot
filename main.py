@@ -1,13 +1,12 @@
 import logging
 import sqlite3
 import os
+import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
 )
 import google.generativeai as genai
 
@@ -18,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
 def init_db():
     conn = sqlite3.connect("cases.db")
@@ -38,6 +37,19 @@ def init_db():
 
 init_db()
 
+def get_gemini_translation(text):
+    try:
+        prompt = (
+            f"Translate and rewrite the following dispatch note into a clean, professional English update. "
+            f"Keep shop numbers, unit IDs, and technical terms accurate. Only return the final translated text:\n'{text}'"
+        )
+        response = model.generate_content(prompt)
+        if response and response.text:
+            return response.text.strip()
+    except Exception as e:
+        logging.error(f"Gemini API Error: {e}")
+    return text
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Salom! Case Bot ishga tushdi.\n\n"
@@ -55,18 +67,9 @@ async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Iltimos, case matnini yuboring. Masalan:\n/newcase 952 shopda tr tire ni almashtirish kerak")
         return
 
-    # Gemini AI orqali professional ingliz tiliga o'girish
-    translated_text = user_text
-    try:
-        prompt = (
-            f"Translate and rewrite the following dispatch note into a clean, professional English update. "
-            f"Keep shop numbers, unit IDs, and technical terms accurate. Only return the final translated text without commentary:\n'{user_text}'"
-        )
-        response = model.generate_content(prompt)
-        if response and response.text:
-            translated_text = response.text.strip()
-    except Exception as e:
-        logging.error(f"Gemini API Error: {e}")
+    # Tarjimani fonda (thread pool) bajarish - bot qotib qolmaydi
+    loop = asyncio.get_running_loop()
+    translated_text = await loop.run_in_executor(None, get_gemini_translation, user_text)
 
     conn = sqlite3.connect("cases.db")
     cursor = conn.cursor()
@@ -80,6 +83,7 @@ async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ **Case #{case_id} saqlandi!**\n\n"
+        f"📝 **Inglizcha tarjimasi:**\n{translated_text}\n\n"
         f"Smena yakunida /caseupdates bosib hisobotni olishingiz mumkin.",
         parse_mode="Markdown"
     )
