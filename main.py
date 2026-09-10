@@ -64,10 +64,9 @@ async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = " ".join(context.args)
 
     if not user_text:
-        await update.message.reply_text("Iltimos, case matnini yuboring. Masalan:\n/newcase 952 shopda tr tire ni almashtirish kerak")
+        await update.message.reply_text("Iltimos, case matnini yuboring. Masalan:\n/newcase 3007 reefer unit")
         return
 
-    # Tarjimani fonda (thread pool) bajarish - bot qotib qolmaydi
     loop = asyncio.get_running_loop()
     translated_text = await loop.run_in_executor(None, get_gemini_translation, user_text)
 
@@ -82,9 +81,7 @@ async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     await update.message.reply_text(
-        f"✅ **Case #{case_id} saqlandi!**\n\n"
-        f"📝 **Inglizcha tarjimasi:**\n{translated_text}\n\n"
-        f"Smena yakunida /caseupdates bosib hisobotni olishingiz mumkin.",
+        f"✅ **Case #{case_id} caselar qatoriga qo'shildi!**",
         parse_mode="Markdown"
     )
 
