@@ -1,18 +1,26 @@
 import logging
 import sqlite3
 import os
-import requests
+import threading
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
 )
+import google.generativeai as genai
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
+
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+    except Exception as e:
+        logging.error(f"Gemini Init Error: {e}")
 
 def init_db():
     conn = sqlite3.connect("cases.db")
@@ -32,26 +40,25 @@ def init_db():
 
 init_db()
 
-def quick_translate(text):
+def async_translate_and_update(case_id, text):
+    """Tarjimani fonda bajarish (Botni hech qachon qotirmaydi)"""
     if not GEMINI_API_KEY:
-        return text
-    
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    prompt_text = (
-        f"Translate and rewrite the following dispatch note into a clean, professional English update. "
-        f"Keep shop numbers, unit IDs, and technical terms accurate. Only return the final translated text:\n'{text}'"
-    )
-    payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
-    
+        return
     try:
-        response = requests.post(url, json=payload, timeout=3)
-        if response.status_code == 200:
-            res_json = response.json()
-            return res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+        prompt = (
+            f"Translate and rewrite the following dispatch note into a clear, professional English update. "
+            f"Keep shop numbers, unit IDs, and technical terms accurate. Only return the final translated text:\n'{text}'"
+        )
+        response = model.generate_content(prompt)
+        if response and response.text:
+            translated = response.text.strip()
+            conn = sqlite3.connect("cases.db")
+            cursor = conn.cursor()
+            cursor.execute("UPDATE cases SET english_text = ? WHERE id = ?", (translated, case_id))
+            conn.commit()
+            conn.close()
     except Exception as e:
-        logging.error(f"Translation bypass/timeout: {e}")
-    
-    return text
+        logging.error(f"Background Translation Error: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -70,22 +77,22 @@ async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Iltimos, case matnini yuboring. Masalan:\n/newcase 3007 reefer unit")
         return
 
-    # Tarjimani tezkor sinab ko'rish (Maksimal 3s)
-    translated_text = quick_translate(user_text)
-
+    # Avval darslikdek tezda bazaga saqlash
     conn = sqlite3.connect("cases.db")
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO cases (user_id, original_text, english_text) VALUES (?, ?, ?)",
-        (user_id, user_text, translated_text)
+        (user_id, user_text, user_text)
     )
     case_id = cursor.lastrowid
     conn.commit()
     conn.close()
 
+    # Tarjima jarayonini alohida fonda (thread) ishga tushiramiz
+    threading.Thread(target=async_translate_and_update, args=(case_id, user_text), daemon=True).start()
+
     await update.message.reply_text(
-        f"✅ **Case #{case_id} caselar qatoriga qo'shildi!**\n\n"
-        f"📝 **Note:** {translated_text}",
+        f"✅ **Case #{case_id} caselar qatoriga qo'shildi!**",
         parse_mode="Markdown"
     )
 
