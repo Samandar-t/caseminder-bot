@@ -16,8 +16,9 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
 def init_db():
     conn = sqlite3.connect("cases.db")
@@ -41,11 +42,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Salom! Yangilangan Case Bot ishga tushdi.\n\n"
         "Buyruqlar:\n"
-        "• /newcase <matn> - Yangi case qo'shish (Ingliz tiliga tarjima qilinadi)\n"
+        "• /newcase <matn> - Yangi case qo'shish\n"
         "• /casedone <ID> - Caseni yopish (Done)\n"
-        "• /casecancel <ID> - Caseni bekor qilish (Cancelled/Take care)\n"
-        "• /caseupdates - Smenadagi ochiq caselar hisobotini olish\n"
-        "• /cases - Barcha ochiq caselar ro'yxati"
+        "• /casecancel <ID> - Caseni bekor qilish (Cancelled)\n"
+        "• /caseupdates - Smenadagi ochiq caselar hisoboti\n"
+        "• /cases - Barcha ochiq caselar"
     )
 
 async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -53,16 +54,21 @@ async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = " ".join(context.args)
 
     if not user_text:
-        await update.message.reply_text("Iltimos, case matnini yazing. Masalan: /newcase Unit 102 invoice berilishi kerak fast delivery")
+        await update.message.reply_text("Iltimos, case matnini yuboring. Masalan:\n/newcase 952 shopda tr tire ni almashtirish kerak")
         return
 
-    # Gemini AI orqali aralash matnni professional ingliz tiliga o'girish
-    prompt = (
-        f"Translate and rewrite the following mixed language text into a clear, professional English dispatch/customer support note. "
-        f"Keep unit numbers, store details, and technical terms accurate.\nText: '{user_text}'"
-    )
-    response = model.generate_content(prompt)
-    translated_text = response.text.strip()
+    # Tarjima jarayoni (Xatolik bo'lsa asl matnni oladi)
+    translated_text = user_text
+    try:
+        prompt = (
+            f"Translate and rewrite the following mixed language text into a clear, professional English dispatch/customer support note. "
+            f"Keep unit numbers, store details, and technical terms accurate:\n'{user_text}'"
+        )
+        response = model.generate_content(prompt)
+        if response and response.text:
+            translated_text = response.text.strip()
+    except Exception as e:
+        logging.error(f"Gemini API Error: {e}")
 
     conn = sqlite3.connect("cases.db")
     cursor = conn.cursor()
@@ -76,10 +82,10 @@ async def new_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ **Case #{case_id} Created**\n\n"
-        f"📌 **Translated English Note:**\n{translated_text}\n\n"
-        f" Status: `Open`\n"
-        f" To mark Done: `/casedone {case_id}`\n"
-        f" To Cancel: `/casecancel {case_id}`",
+        f"📌 **Note:**\n{translated_text}\n\n"
+        f"• Status: `Open`\n"
+        f"• Done: `/casedone {case_id}`\n"
+        f"• Cancel: `/casecancel {case_id}`",
         parse_mode="Markdown"
     )
 
@@ -109,33 +115,33 @@ async def case_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    await update.message.reply_text(f"🚫 **Case #{case_id} CANCELLED** (Customer took care / No shop needed).")
+    await update.message.reply_text(f"🚫 **Case #{case_id} CANCELLED**")
 
 async def case_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     conn = sqlite3.connect("cases.db")
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, english_text, status, created_at FROM cases WHERE user_id = ? AND status = 'Open'",
+        "SELECT id, english_text, status FROM cases WHERE user_id = ? AND status = 'Open'",
         (user_id,)
     )
     rows = cursor.fetchall()
     conn.close()
 
     if not rows:
-        await update.message.reply_text("✨ Smenangizda barcha caselar bajarilgan! Ochiq yoki hal bo'lmagan issue'lar yo'q.")
+        await update.message.reply_text("✨ Smenangizda barcha caselar bajarilgan! Ochiq issue'lar yo'q.")
         return
 
     report = "📢 **SHIFT UPDATES / UNRESOLVED ISSUES**\n"
     report += "──────────────────────────\n\n"
     for row in rows:
-        case_id, eng_text, status, created_at = row
+        case_id, eng_text, status = row
         report += f"🔹 **Case #{case_id}** [Status: {status}]\n"
         report += f"📝 {eng_text}\n"
-        report += f"⚡ Quick action: `/casedone {case_id}` | `/casecancel {case_id}`\n\n"
+        report += f"⚡ Actions: `/casedone {case_id}` | `/casecancel {case_id}`\n\n"
 
     report += "──────────────────────────\n"
-    report += "ℹ️ *Copy and paste this message directly into the Updates group.*"
+    report += "ℹ️ *Updates guruhiga yuborish uchun nusxalab oling.*"
 
     await update.message.reply_text(report, parse_mode="Markdown")
 
